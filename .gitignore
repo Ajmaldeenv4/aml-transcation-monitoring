@@ -1,0 +1,30 @@
+# Synthetic data — raw downloads are NOT committed (synthetic only, but kept out of VCS for size/provenance)
+data/raw/
+*.csv
+!tests/**/*.csv
+
+# Trained model artifacts
+*.joblib
+*.pkl
+artifacts/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Case store DB
+*.db
+*.sqlite
+*.sqlite3
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

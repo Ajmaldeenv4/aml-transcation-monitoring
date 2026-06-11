@@ -1,0 +1,17 @@
+# High-risk jurisdiction watchlist (ISO 3166-1 alpha-2 country codes).
+#
+# In a production TM system this list is sourced from FATF "Call for Action" /
+# "Increased Monitoring" lists, EU high-risk third countries, and the firm's own
+# risk appetite. Here it is an illustrative, configurable synthetic watchlist —
+# NOT an endorsement or accusation about any real jurisdiction.
+high_risk_countries:
+  - IR  # illustrative
+  - KP  # illustrative
+  - SY  # illustrative
+  - MM  # illustrative
+  - AF  # illustrative
+
+# Optional: medium-risk for future tiered scoring.
+medium_risk_countries:
+  - PK
+  - YE

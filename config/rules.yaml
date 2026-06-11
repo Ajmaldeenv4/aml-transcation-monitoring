@@ -1,0 +1,72 @@
+# Sentinel AML — rules engine configuration.
+# These thresholds are deliberately analyst-tunable: a real Transaction
+# Monitoring (TM) team tunes scenario parameters to balance detection against
+# false-positive volume. Each block maps to one typology module in src/sentinel/rules/.
+
+# Reporting / regulatory threshold used as the reference point for structuring
+# and threshold-avoidance scenarios (currency-agnostic synthetic value).
+reporting_threshold: 10000
+
+rules:
+  structuring:
+    enabled: true
+    # Cash transactions sized in the "just under the threshold" band ...
+    band_lower: 9000
+    band_upper: 9999
+    # ... at least this many ...
+    min_count: 3
+    # ... within this rolling window (hours).
+    window_hours: 72
+    severity: high
+
+  rapid_movement:
+    enabled: true
+    # Fraction of an inbound credit that leaves the account to count as pass-through.
+    outflow_ratio: 0.90
+    # Inbound and matching outbound must occur within this window (hours).
+    window_hours: 48
+    # Ignore trivial amounts.
+    min_amount: 5000
+    severity: high
+
+  round_amount:
+    enabled: true
+    # An amount is "round" if it is a multiple of this value.
+    round_multiple: 1000
+    # At least this many round transfers between the same linked pair ...
+    min_count: 3
+    # ... within this window (hours).
+    window_hours: 168
+    severity: medium
+
+  threshold_avoidance:
+    enabled: true
+    # Transactions within this fraction below the reporting threshold.
+    proximity: 0.05  # i.e. 9500-9999 when threshold is 10000
+    min_count: 2
+    window_hours: 168
+    severity: medium
+
+  high_risk_geography:
+    enabled: true
+    # Country watchlist lives in config/high_risk_countries.yaml.
+    min_amount: 1000
+    severity: high
+
+  velocity_spike:
+    enabled: true
+    # Flag when a customer's transaction count or value in the recent window
+    # exceeds their historical baseline mean by this multiplier.
+    multiplier: 3.0
+    recent_window_hours: 24
+    baseline_window_days: 30
+    min_baseline_txns: 5
+    severity: medium
+
+  network_ring:
+    # Advanced / optional graph scenario — disabled by default.
+    enabled: false
+    min_cycle_length: 3
+    max_cycle_length: 6
+    window_hours: 168
+    severity: high

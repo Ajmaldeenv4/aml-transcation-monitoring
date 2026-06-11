@@ -1,0 +1,56 @@
+# Sentinel AML — full stack.
+#   docker compose up --build
+# Brings up the API plus both Streamlit dashboards sharing a SQLite volume.
+# A Postgres backend is available via the optional "postgres" profile.
+
+services:
+  api:
+    build: .
+    command: >-
+      sh -c "python -m sentinel.cli train --scale 8 &&
+             python -m sentinel.cli seed --scale 3 &&
+             uvicorn sentinel.api.main:app --host 0.0.0.0 --port 8000"
+    environment:
+      SENTINEL_DB_URL: sqlite:////data/sentinel.db
+    volumes:
+      - sentinel-data:/data
+    ports:
+      - "8000:8000"
+
+  analyst:
+    build: .
+    command: streamlit run dashboards/analyst_app.py --server.port 8501 --server.address 0.0.0.0
+    environment:
+      SENTINEL_API_URL: http://api:8000
+    depends_on:
+      - api
+    ports:
+      - "8501:8501"
+
+  mi:
+    build: .
+    command: streamlit run dashboards/mi_app.py --server.port 8502 --server.address 0.0.0.0
+    environment:
+      SENTINEL_API_URL: http://api:8000
+    depends_on:
+      - api
+    ports:
+      - "8502:8502"
+
+  # Optional: `docker compose --profile postgres up` and set
+  # SENTINEL_DB_URL=postgresql://sentinel:sentinel@postgres:5432/sentinel on api/analyst/mi.
+  postgres:
+    image: postgres:16-alpine
+    profiles: ["postgres"]
+    environment:
+      POSTGRES_USER: sentinel
+      POSTGRES_PASSWORD: sentinel
+      POSTGRES_DB: sentinel
+    ports:
+      - "5432:5432"
+    volumes:
+      - sentinel-pg:/var/lib/postgresql/data
+
+volumes:
+  sentinel-data:
+  sentinel-pg:
