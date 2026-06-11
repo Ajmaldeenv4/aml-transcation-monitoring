@@ -17,6 +17,20 @@ A secondary **MI / KPI dashboard** gives the manager-level view.
 
 ---
 
+## Demo
+
+![Sentinel analyst triage workflow](docs/demo.gif)
+
+*Ranked queue → explainable ML risk score → analyst disposition with mandatory rationale → auto-drafted SAR narrative → manager MI/KPI view.*
+
+| Analyst review (queue + SHAP explanation) | Auto-drafted SAR narrative |
+|---|---|
+| ![Analyst review](docs/screenshots/analyst-overview.png) | ![SAR draft](docs/screenshots/analyst-sar.png) |
+| **Disposition (mandatory rationale)** | **MI / KPI dashboard** |
+| ![Disposition](docs/screenshots/analyst-disposition.png) | ![MI dashboard](docs/screenshots/mi-dashboard.png) |
+
+---
+
 ## What it does (the analyst's workflow, in code)
 
 1. **Ingest & validate** synthetic transactions into typed Pydantic models.
