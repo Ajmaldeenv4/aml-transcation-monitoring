@@ -31,10 +31,15 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     return 0
 
 
-def _load_default_transactions(scale: int = 1):
+def _load_default_transactions(scale: int = 1, saml_sample_frac: float = 0.02):
     if SAML_D_PATH.exists():
-        print(f"Loading SAML-D from {SAML_D_PATH}")
-        return load_saml_d(SAML_D_PATH)
+        # The full SAML-D file is ~9.5M rows; stratified-sample normal rows while
+        # keeping all labelled-laundering rows so the run stays tractable.
+        print(
+            f"Loading SAML-D from {SAML_D_PATH} "
+            f"(sample_frac={saml_sample_frac}, all laundering rows kept)"
+        )
+        return load_saml_d(SAML_D_PATH, sample_frac=saml_sample_frac)
     print(f"SAML-D not found; using synthetic generator (seed=42, scale={scale}).")
     df = generate_dataset(seed=42, scale=scale)
     return load_transactions(normalise_frame(df))

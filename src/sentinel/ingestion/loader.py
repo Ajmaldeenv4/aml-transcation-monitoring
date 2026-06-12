@@ -110,9 +110,41 @@ def load_transactions(df: pd.DataFrame) -> list[Transaction]:
     return [t for t in txns if t is not None]
 
 
-def load_saml_d(path: str | Path) -> list[Transaction]:
-    """Load the SAML-D CSV from ``path`` into validated Transaction models."""
-    raw = pd.read_csv(path)
+def read_saml_d_frame(
+    path: str | Path,
+    *,
+    sample_frac: float | None = None,
+    keep_laundering: bool = True,
+    seed: int = 42,
+) -> pd.DataFrame:
+    """Read SAML-D into a (optionally stratified-sampled) DataFrame.
+
+    The full SAML-D file is ~9.5M rows / ~1 GB, which is impractical to validate
+    row-by-row interactively. When ``sample_frac`` is set we read in chunks and
+    keep a reproducible fraction of *normal* rows; with ``keep_laundering`` we
+    retain **all** labelled-laundering rows so the rare positives are not lost.
+    The combined sample is returned with a unified ``timestamp`` column.
+
+    Caveat: stratified sampling preserves class balance but breaks per-account
+    temporal continuity, so account-level scenarios (structuring, round-amount,
+    velocity) are weakened on a sample. Use a larger ``sample_frac`` (or the full
+    file) for a faithful run of those rules.
+    """
+    if sample_frac is None:
+        raw = pd.read_csv(path)
+    else:
+        import numpy as np
+
+        rs = np.random.RandomState(seed)
+        parts: list[pd.DataFrame] = []
+        for chunk in pd.read_csv(path, chunksize=500_000):
+            normal = chunk[chunk["Is_laundering"] == 0].sample(
+                frac=sample_frac, random_state=rs
+            )
+            if keep_laundering:
+                parts.append(chunk[chunk["Is_laundering"] == 1])
+            parts.append(normal)
+        raw = pd.concat(parts).reset_index(drop=True)
 
     # SAML-D stores Date and Time separately; combine into one timestamp.
     if "Date" in raw.columns and "Time" in raw.columns:
@@ -121,6 +153,22 @@ def load_saml_d(path: str | Path) -> list[Transaction]:
         )
     elif "timestamp" not in raw.columns:
         raise ValueError("SAML-D file lacks Date/Time or timestamp columns")
+    return raw
 
+
+def load_saml_d(
+    path: str | Path,
+    *,
+    sample_frac: float | None = None,
+    keep_laundering: bool = True,
+    seed: int = 42,
+) -> list[Transaction]:
+    """Load the SAML-D CSV from ``path`` into validated Transaction models.
+
+    See :func:`read_saml_d_frame` for the sampling semantics and caveats.
+    """
+    raw = read_saml_d_frame(
+        path, sample_frac=sample_frac, keep_laundering=keep_laundering, seed=seed
+    )
     normalised = normalise_frame(raw, column_map=SAML_D_COLUMN_MAP)
     return load_transactions(normalised)

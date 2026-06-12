@@ -100,8 +100,12 @@ Or the whole stack in one command:
 docker compose up --build        # API :8000 · analyst :8501 · MI :8502
 ```
 
-By default Sentinel uses the synthetic generator. To use SAML-D, place the CSV at
-`data/raw/SAML-D.csv` (see [`data/README.md`](data/README.md)).
+By default Sentinel uses the synthetic generator. To use **SAML-D** (9.5M
+transactions), place the CSV at `data/raw/SAML-D.csv` (see
+[`data/README.md`](data/README.md)) — `run-rules` then stratified-samples it
+automatically. Sentinel has been validated end-to-end on SAML-D; see
+[`docs/saml_d_findings.md`](docs/saml_d_findings.md) for what it detects and the
+honest caveats.
 
 ## Testing & quality
 

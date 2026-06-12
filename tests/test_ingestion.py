@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import pandas as pd
+
 from sentinel.generator import generate_dataset
-from sentinel.ingestion import load_transactions, normalise_frame
+from sentinel.ingestion import load_transactions, normalise_frame, read_saml_d_frame
 from sentinel.models import TransactionType, Typology
 from sentinel.rules import run_rules
 
@@ -47,3 +49,37 @@ def test_every_enabled_typology_fires_on_synthetic_data():
     fired = {a.rule_id for a in alerts}
     for typ in Typology:
         assert typ in fired, f"no alert fired for {typ.value}"
+
+
+def _saml_d_shaped_csv(tmp_path):
+    """A tiny CSV with SAML-D's columns: 4 laundering + 100 normal rows."""
+    rows = []
+    for i in range(4):
+        rows.append(["10:00:00", "2022-10-07", f"S{i}", f"R{i}", 9000 + i,
+                     "US dollar", "US dollar", "USA", "Nigeria", "Cross-border", 1, "Layered_Fan_Out"])
+    for i in range(100):
+        rows.append(["11:00:00", "2022-10-07", f"S{i}", f"R{i}", 100 + i,
+                     "US dollar", "US dollar", "USA", "UK", "Cash Deposit", 0, "Normal"])
+    cols = ["Time", "Date", "Sender_account", "Receiver_account", "Amount",
+            "Payment_currency", "Received_currency", "Sender_bank_location",
+            "Receiver_bank_location", "Payment_type", "Is_laundering", "Laundering_type"]
+    path = tmp_path / "SAML-D.csv"
+    pd.DataFrame(rows, columns=cols).to_csv(path, index=False)
+    return path
+
+
+def test_saml_d_sampling_keeps_all_laundering_rows(tmp_path):
+    path = _saml_d_shaped_csv(tmp_path)
+    # Sample 0% of normals but keep every laundering row -> exactly the 4 positives.
+    frame = read_saml_d_frame(path, sample_frac=0.0, keep_laundering=True, seed=1)
+    assert int(frame["Is_laundering"].sum()) == 4
+    assert (frame["Is_laundering"] == 0).sum() == 0
+    assert "timestamp" in frame.columns
+
+
+def test_saml_d_sampling_is_reproducible(tmp_path):
+    path = _saml_d_shaped_csv(tmp_path)
+    a = read_saml_d_frame(path, sample_frac=0.3, seed=42)
+    b = read_saml_d_frame(path, sample_frac=0.3, seed=42)
+    assert len(a) == len(b)
+    assert int(a["Is_laundering"].sum()) == 4  # all positives retained either way
