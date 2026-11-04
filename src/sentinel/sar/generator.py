@@ -73,8 +73,8 @@ Severity: {alert.severity.value}
 1. What triggered this report
 The {alert.typology_label} scenario was triggered for {subject}. The system observed {indicator}.
 
-2. Transactions reviewed
-{len(alert.triggering_txn_ids)} transaction(s) were reviewed: {', '.join(alert.triggering_txn_ids)}.
+2. Transactions in scope
+{len(alert.triggering_txn_ids)} transaction(s) triggered this alert: {', '.join(alert.triggering_txn_ids)}.
 Supporting evidence:
 {evidence_lines}
 

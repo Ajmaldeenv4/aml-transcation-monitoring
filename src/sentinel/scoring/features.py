@@ -1,7 +1,8 @@
 """Feature engineering for alert risk scoring.
 
 Each alert becomes one feature row built from the alert itself plus the history
-of its entity (the account the alert concerns). Features are deliberately
+of its entity (the account the alert concerns), up to the alert's last triggering
+transaction so no feature can see the future. Features are deliberately
 interpretable so SHAP explanations read like analyst reasoning.
 
 The ground-truth label (``alert_label``) marks an alert as a true positive when
@@ -54,6 +55,9 @@ def build_feature_row(
     trig = [txn_by_id[i] for i in alert.triggering_txn_ids if i in txn_by_id]
     amounts = [t.amount for t in trig] or [0.0]
     history = entity_index.get(alert.entity_id, [])
+    if trig:
+        cutoff = max(t.timestamp for t in trig)
+        history = [t for t in history if t.timestamp <= cutoff]
 
     cross_border = sum(1 for t in history if t.is_cross_border)
     geo_hits = sum(

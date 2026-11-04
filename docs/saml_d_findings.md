@@ -13,6 +13,10 @@ laundering. This documents what Sentinel detects on real benchmark data, and is
   ~1 GB / 9.5M rows, impractical to validate row-by-row interactively.
 - **Config:** default `config/rules.yaml` thresholds (untuned for SAML-D).
 
+> **Stale results:** the alert counts below predate the rule fixes to velocity,
+> rapid movement, structuring, round-amount and threshold avoidance, and have not
+> been regenerated. Re-run on SAML-D before quoting them.
+
 ## Results — default config
 
 | Typology rule | Alerts | Touching a labelled-laundering txn |
@@ -51,11 +55,12 @@ false-positive burden Sentinel's ML risk-ranking layer exists to triage.
    scenarios (`structuring`, `round_amount`, and to a degree `velocity_spike`) are
    **understated**. A faithful run of those rules needs the full file or a much
    larger sample.
-3. **Country mapping is approximate.** SAML-D uses country *names*; the loader maps
-   them to 2-letter codes heuristically.
+3. **Country mapping is table-driven.** SAML-D uses country *names*; the loader maps
+   known names to ISO alpha-2 codes and passes unknown names through unchanged.
 4. **The headline FP-reduction metric stays generator-based.** Sentinel's reproducible
-   95.5%-recall / ~39%-review-reduction figure ([`artifacts/metrics.json`](../README.md))
-   is measured on the labelled synthetic generator with disjoint train/test seeds.
+   figures ([README](../README.md#measured-result-reproducible-synthetic-data)) are
+   measured on the labelled synthetic generator with separate training, validation
+   and test seeds, and depend on a signal the generator plants.
    SAML-D is used here to validate ingestion + rules on real benchmark data, **not**
    to restate that metric.
 
@@ -67,4 +72,4 @@ python -m sentinel.cli run-rules            # samples SAML-D, prints alert summa
 ```
 
 The geography-with-SAML-D-watchlist figure is produced by calling
-`sentinel.rules.high_risk_geography.detect(txns, cfg, high_risk={"AL","MO","NI","ME","TU","PA","AE"})`.
+`sentinel.rules.high_risk_geography.detect(txns, cfg, high_risk={"AL","MA","NG","MX","TR","PK","AE"})`.

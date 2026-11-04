@@ -23,16 +23,28 @@ def get_alert(alert_id: str) -> dict:
     return httpx.get(_url(f"/alerts/{alert_id}"), timeout=_TIMEOUT).json()
 
 
-def post_disposition(alert_id: str, status: str, rationale: str, analyst: str) -> httpx.Response:
+def post_disposition(alert_id: str, status: str, rationale: str, api_key: str) -> httpx.Response:
     return httpx.post(
         _url(f"/alerts/{alert_id}/disposition"),
-        json={"status": status, "rationale": rationale, "analyst": analyst},
+        json={"status": status, "rationale": rationale},
+        headers={"X-API-Key": api_key},
         timeout=_TIMEOUT,
     )
 
 
-def create_sar(alert_id: str) -> dict:
-    return httpx.post(_url(f"/alerts/{alert_id}/sar"), timeout=_TIMEOUT).json()
+def create_sar(alert_id: str, api_key: str) -> httpx.Response:
+    return httpx.post(
+        _url(f"/alerts/{alert_id}/sar"), headers={"X-API-Key": api_key}, timeout=_TIMEOUT
+    )
+
+
+def get_sar(alert_id: str) -> dict | None:
+    resp = httpx.get(_url(f"/alerts/{alert_id}/sar"), timeout=_TIMEOUT)
+    return resp.json() if resp.status_code == 200 else None
+
+
+def get_audit(alert_id: str) -> list[dict]:
+    return httpx.get(_url(f"/alerts/{alert_id}/audit"), timeout=_TIMEOUT).json()
 
 
 def get_mi_summary() -> dict:

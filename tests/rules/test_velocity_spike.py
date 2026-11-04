@@ -49,3 +49,27 @@ def test_negative_insufficient_baseline():
         txn("s1", "ACC1", "B", 9000, days=1),
     ]
     assert velocity_spike.detect(txns, CONFIG) == []
+
+
+def test_negative_sparse_steady_activity():
+    # Same $100 every five days: each payment dwarfs a calendar-day average, but
+    # it is exactly what this account normally does.
+    txns = [txn(f"b{i}", "ACC1", "B", 100, days=i * 5) for i in range(6)]
+    assert velocity_spike.detect(txns, CONFIG) == []
+
+
+def test_positive_spike_followed_by_normal_activity():
+    txns = [txn(f"b{i}", "ACC1", "B", 100, days=i) for i in range(10)]
+    txns += [txn(f"s{i}", "ACC1", "B", 50000, days=10, hours=i) for i in range(4)]
+    txns.append(txn("later", "ACC1", "B", 100, days=13))
+    alerts = velocity_spike.detect(txns, CONFIG)
+    assert len(alerts) == 1
+    assert alerts[0].evidence["recent_txn_count"] == 4
+    assert alerts[0].evidence["recent_total"] == 200000
+
+
+def test_separate_spikes_alert_separately():
+    txns = [txn(f"b{i}", "ACC1", "B", 100, days=i) for i in range(10)]
+    txns.append(txn("s1", "ACC1", "B", 5000, days=10))
+    txns.append(txn("s2", "ACC1", "B", 50000, days=14))
+    assert len(velocity_spike.detect(txns, CONFIG)) == 2

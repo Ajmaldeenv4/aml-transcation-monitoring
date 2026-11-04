@@ -68,10 +68,12 @@ if metrics_path.exists():
     b.metric("False-positive reduction", f"{m['false_positive_reduction_pct']}%")
     c.metric("Review-volume reduction", f"{m['review_volume_reduction_pct']}%")
     st.caption(
-        f"At a risk threshold of {m['risk_threshold']} preserving a "
-        f"{m['target_recall'] * 100:.0f}% recall target, on a held-out synthetic test set "
-        f"({m['true_positive_alerts']} true-positive vs {m['false_positive_alerts']} "
-        "false-positive alerts). Reproduce with `python -m sentinel.scoring.evaluate`."
+        f"Risk threshold {m['risk_threshold']}, fixed on validation data for a "
+        f"{m['target_recall'] * 100:.0f}% recall target. Mean of {m['test_seeds']} synthetic "
+        f"test seeds ({m['true_positive_alerts']} true-positive vs "
+        f"{m['false_positive_alerts']} false-positive alerts). Recall ranged "
+        f"{m['recall_preserved_min_pct']}-{m['recall_preserved_max_pct']}%. "
+        "Reproduce with `python -m sentinel.scoring.evaluate`."
     )
 else:
     st.info("Run `python -m sentinel.scoring.evaluate` to produce the FP-reduction metric.")

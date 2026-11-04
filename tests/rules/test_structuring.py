@@ -78,3 +78,34 @@ def test_disabled_returns_nothing():
         txn("t3", "X", "ACC1", 9900, hours=20, txn_type=TransactionType.CASH_DEPOSIT),
     ]
     assert structuring.detect(txns, cfg) == []
+
+
+def test_withdrawals_attributed_to_the_customer_account():
+    txns = [
+        txn(f"t{i}", "ACC1", "TELLER", 9500, hours=i, txn_type=TransactionType.CASH_WITHDRAWAL)
+        for i in range(3)
+    ]
+    alerts = structuring.detect(txns, CONFIG)
+    assert [a.entity_id for a in alerts] == ["ACC1"]
+
+
+def test_negative_unrelated_customers_at_same_atm():
+    txns = [
+        txn(f"t{i}", f"CUST{i}", "ATM", 9500, hours=i, txn_type=TransactionType.CASH_WITHDRAWAL)
+        for i in range(3)
+    ]
+    assert structuring.detect(txns, CONFIG) == []
+
+
+def test_alert_covers_whole_burst_and_later_bursts():
+    txns = [
+        txn(f"a{i}", "X", "ACC1", 9500, hours=i, txn_type=TransactionType.CASH_DEPOSIT)
+        for i in range(10)
+    ]
+    txns += [
+        txn(f"b{i}", "X", "ACC1", 9500, days=30, hours=i, txn_type=TransactionType.CASH_DEPOSIT)
+        for i in range(5)
+    ]
+    alerts = sorted(structuring.detect(txns, CONFIG), key=lambda a: a.created_at)
+    assert [a.evidence["count"] for a in alerts] == [10, 5]
+    assert alerts[0].evidence["total_amount"] == 95000

@@ -11,7 +11,13 @@ from __future__ import annotations
 from collections import defaultdict
 
 from sentinel.models import Alert, Transaction, Typology
-from sentinel.rules._common import build_alert, severity_from_config, sort_by_time
+from sentinel.rules._common import (
+    build_alert,
+    customer_account,
+    find_bursts,
+    severity_from_config,
+    sort_by_time,
+)
 
 RULE_ID = Typology.THRESHOLD_AVOIDANCE
 
@@ -31,39 +37,23 @@ def detect(transactions: list[Transaction], config: dict) -> list[Alert]:
     by_account: dict[str, list[Transaction]] = defaultdict(list)
     for t in transactions:
         if lower <= t.amount < threshold:
-            by_account[t.sender_account].append(t)
+            by_account[customer_account(t)].append(t)
 
     alerts: list[Alert] = []
     for account, txns in by_account.items():
-        ordered = sort_by_time(txns)
-        window_txns = _first_window(ordered, window, min_count)
-        if window_txns:
+        for burst in find_bursts(sort_by_time(txns), window, min_count):
             alerts.append(
                 build_alert(
                     RULE_ID,
                     account,
-                    window_txns,
+                    burst,
                     severity,
                     evidence={
-                        "count": len(window_txns),
+                        "count": len(burst),
                         "threshold": threshold,
                         "band": [round(lower, 2), threshold],
-                        "amounts": [round(t.amount, 2) for t in window_txns],
+                        "amounts": [round(t.amount, 2) for t in burst],
                     },
                 )
             )
     return alerts
-
-
-def _first_window(
-    ordered: list[Transaction], window_seconds: int, min_count: int
-) -> list[Transaction]:
-    start = 0
-    for end in range(len(ordered)):
-        while (
-            ordered[end].timestamp - ordered[start].timestamp
-        ).total_seconds() > window_seconds:
-            start += 1
-        if end - start + 1 >= min_count:
-            return ordered[start : end + 1]
-    return []

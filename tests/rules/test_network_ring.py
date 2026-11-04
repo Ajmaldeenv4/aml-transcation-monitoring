@@ -47,3 +47,24 @@ def test_negative_disabled_by_default():
         txn("t3", "C", "A", 4700, hours=20),
     ]
     assert network_ring.detect(txns, {"rules": {"network_ring": {"enabled": False}}}) == []
+
+
+def test_positive_recent_ring_on_an_old_relationship():
+    txns = [
+        txn("old", "A", "B", 50, days=0),
+        txn("t1", "A", "B", 5000, days=100),
+        txn("t2", "B", "C", 4900, days=101),
+        txn("t3", "C", "A", 4800, days=102),
+    ]
+    alerts = network_ring.detect(txns, CONFIG)
+    assert len(alerts) == 1
+    assert sorted(alerts[0].triggering_txn_ids) == ["t1", "t2", "t3"]
+
+
+def test_negative_legs_never_share_a_window():
+    txns = [
+        txn("t1", "A", "B", 5000, days=0),
+        txn("t2", "B", "C", 4900, days=30),
+        txn("t3", "C", "A", 4800, days=60),
+    ]
+    assert network_ring.detect(txns, CONFIG) == []

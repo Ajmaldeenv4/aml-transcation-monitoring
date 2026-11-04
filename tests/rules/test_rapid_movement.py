@@ -55,3 +55,29 @@ def test_negative_below_min_amount():
         txn("out1", "ACC1", "B", 3900, hours=2),
     ]
     assert rapid_movement.detect(txns, CONFIG) == []
+
+
+def test_one_outflow_cannot_explain_several_credits():
+    txns = [txn(f"in{i}", f"S{i}", "ACC1", 10000, hours=i) for i in range(5)]
+    txns.append(txn("out", "ACC1", "Z", 10000, hours=6))
+    alerts = rapid_movement.detect(txns, CONFIG)
+    assert len(alerts) == 1
+    assert alerts[0].triggering_txn_ids == ["in0", "out"]
+
+
+def test_large_outflow_can_clear_several_credits():
+    txns = [txn(f"in{i}", f"S{i}", "ACC1", 10000, hours=i) for i in range(3)]
+    txns.append(txn("out", "ACC1", "Z", 30000, hours=6))
+    assert len(rapid_movement.detect(txns, CONFIG)) == 3
+
+
+def test_evidence_reports_only_the_matched_outflow():
+    txns = [
+        txn("in", "EXT", "ACC1", 10000, hours=0),
+        txn("out", "ACC1", "Z", 25000, hours=1),
+    ]
+    assert rapid_movement.detect(txns, CONFIG)[0].evidence["outflow_ratio"] == 1.0
+
+
+def test_negative_self_transfer():
+    assert rapid_movement.detect([txn("self", "ACC1", "ACC1", 20000)], CONFIG) == []

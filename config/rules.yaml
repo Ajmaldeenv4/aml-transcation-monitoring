@@ -55,8 +55,8 @@ rules:
 
   velocity_spike:
     enabled: true
-    # Flag when a customer's transaction count or value in the recent window
-    # exceeds their historical baseline mean by this multiplier.
+    # Flag when a customer's transaction value in the recent window exceeds the
+    # mean of their earlier active windows by this multiplier.
     multiplier: 3.0
     recent_window_hours: 24
     baseline_window_days: 30

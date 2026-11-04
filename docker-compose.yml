@@ -12,6 +12,8 @@ services:
              uvicorn sentinel.api.main:app --host 0.0.0.0 --port 8000"
     environment:
       SENTINEL_DB_URL: sqlite:////data/sentinel.db
+      # Demo credential only. Set your own before exposing this anywhere.
+      SENTINEL_API_KEYS: ${SENTINEL_API_KEYS:-demo-analyst:demo-key}
     volumes:
       - sentinel-data:/data
     ports:
@@ -22,6 +24,7 @@ services:
     command: streamlit run dashboards/analyst_app.py --server.port 8501 --server.address 0.0.0.0
     environment:
       SENTINEL_API_URL: http://api:8000
+      SENTINEL_API_KEY: ${SENTINEL_API_KEY:-demo-key}
     depends_on:
       - api
     ports:

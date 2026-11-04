@@ -1,16 +1,18 @@
 """Repository layer: the single place that reads/writes the case store.
 
-Every state change also appends an immutable :class:`AuditEntry`, so the audit
-trail is a faithful record of who did what, when.
+Every state change appends an :class:`AuditEntry` in the same transaction, so a
+change and its audit record either both commit or both roll back.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from sqlalchemy import update
 from sqlmodel import Session, select
 
 from sentinel.casestore.db import engine, init_db
+from sentinel.casestore.errors import InvalidTransition
 from sentinel.casestore.tables import (
     AlertRecord,
     AuditEntry,
@@ -19,9 +21,33 @@ from sentinel.casestore.tables import (
 )
 from sentinel.models import Alert, Disposition, DispositionStatus, SARDraft, Severity, Typology
 
+# An alert is decided once. Closed alerts have no onward transitions.
+_ALLOWED_TRANSITIONS = {
+    DispositionStatus.OPEN.value: {
+        DispositionStatus.FALSE_POSITIVE.value,
+        DispositionStatus.ESCALATED.value,
+    },
+}
+
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def _add_audit(
+    s: Session, actor: str, action: str, entity_type: str, entity_id: str, detail: dict
+) -> None:
+    """Queue an audit entry on the caller's session, so it commits with the change."""
+    s.add(
+        AuditEntry(
+            actor=actor,
+            action=action,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            detail=detail,
+            at=_now(),
+        )
+    )
 
 
 def _to_domain_alert(rec: AlertRecord) -> Alert:
@@ -33,6 +59,7 @@ def _to_domain_alert(rec: AlertRecord) -> Alert:
         severity=Severity(rec.severity),
         created_at=rec.created_at,
         evidence=dict(rec.evidence),
+        status=DispositionStatus(rec.status),
         risk_score=rec.risk_score,
         risk_reasons=list(rec.risk_reasons),
     )
@@ -47,21 +74,36 @@ class CaseStore:
 
     # ---- writes -----------------------------------------------------------
     def save_alerts(self, alerts: list[Alert]) -> int:
-        """Upsert alerts (idempotent on alert_id). Returns count written."""
-        written = 0
+        """Upsert alerts (idempotent on alert_id). Returns count written.
+
+        A new score replaces the old one and is audited. Unscored input never
+        erases an existing score.
+        """
+        written = rescored = 0
         with Session(engine) as s:
             for a in alerts:
                 existing = s.get(AlertRecord, a.alert_id)
                 if existing is None:
                     s.add(_alert_to_record(a))
                     written += 1
-                else:
-                    # Refresh ML fields if (re)scored; preserve disposition status.
+                elif a.risk_score is not None and a.risk_score != existing.risk_score:
+                    _add_audit(
+                        s,
+                        "system",
+                        "rescore",
+                        "alert",
+                        a.alert_id,
+                        {"from": existing.risk_score, "to": a.risk_score},
+                    )
                     existing.risk_score = a.risk_score
                     existing.risk_reasons = list(a.risk_reasons)
                     s.add(existing)
+                    rescored += 1
+            _add_audit(
+                s, "system", "ingest_alerts", "batch", "alerts",
+                {"count": written, "rescored": rescored},
+            )
             s.commit()
-        self._audit("system", "ingest_alerts", "batch", "alerts", {"count": written})
         return written
 
     def record_disposition(self, disp: Disposition) -> None:
@@ -70,8 +112,17 @@ class CaseStore:
             if alert is None:
                 raise KeyError(f"unknown alert_id {disp.alert_id}")
             prev = alert.status
-            alert.status = disp.status.value
-            s.add(alert)
+            new = disp.status.value
+            if new not in _ALLOWED_TRANSITIONS.get(prev, set()):
+                raise InvalidTransition(f"alert {disp.alert_id} cannot go from {prev} to {new}")
+            # Conditional update: of two concurrent decisions, only one can win.
+            claimed = s.connection().execute(
+                update(AlertRecord)
+                .where(AlertRecord.alert_id == disp.alert_id, AlertRecord.status == prev)
+                .values(status=new)
+            )
+            if claimed.rowcount != 1:
+                raise InvalidTransition(f"alert {disp.alert_id} was decided by someone else")
             s.add(
                 DispositionRecord(
                     alert_id=disp.alert_id,
@@ -81,17 +132,26 @@ class CaseStore:
                     decided_at=disp.decided_at,
                 )
             )
+            _add_audit(
+                s,
+                disp.analyst,
+                "disposition",
+                "alert",
+                disp.alert_id,
+                {"from": prev, "to": new, "rationale": disp.rationale},
+            )
             s.commit()
-        self._audit(
-            disp.analyst,
-            "disposition",
-            "alert",
-            disp.alert_id,
-            {"from": prev, "to": disp.status.value, "rationale": disp.rationale},
-        )
 
-    def save_sar_draft(self, draft: SARDraft, analyst: str = "system") -> None:
+    def save_sar_draft(self, draft: SARDraft, analyst: str) -> None:
+        """Persist a SAR draft. Only an escalated alert can have one."""
         with Session(engine) as s:
+            alert = s.get(AlertRecord, draft.alert_id)
+            if alert is None:
+                raise KeyError(f"unknown alert_id {draft.alert_id}")
+            if alert.status != DispositionStatus.ESCALATED.value:
+                raise InvalidTransition(
+                    f"alert {draft.alert_id} is {alert.status}; only escalated alerts get a SAR"
+                )
             s.add(
                 SARDraftRecord(
                     alert_id=draft.alert_id,
@@ -100,22 +160,9 @@ class CaseStore:
                     generated_at=draft.generated_at,
                 )
             )
-            s.commit()
-        self._audit(analyst, "sar_draft", "alert", draft.alert_id, {"typology": draft.typology.value})
-
-    def _audit(
-        self, actor: str, action: str, entity_type: str, entity_id: str, detail: dict
-    ) -> None:
-        with Session(engine) as s:
-            s.add(
-                AuditEntry(
-                    actor=actor,
-                    action=action,
-                    entity_type=entity_type,
-                    entity_id=entity_id,
-                    detail=detail,
-                    at=_now(),
-                )
+            _add_audit(
+                s, analyst, "sar_draft", "alert", draft.alert_id,
+                {"typology": draft.typology.value},
             )
             s.commit()
 

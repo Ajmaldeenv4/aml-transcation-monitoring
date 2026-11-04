@@ -7,9 +7,9 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 
 # Install dependencies first for better layer caching.
-COPY pyproject.toml ./
+COPY pyproject.toml requirements.lock ./
 COPY src ./src
-RUN pip install --upgrade pip && pip install -e .
+RUN pip install --upgrade pip && pip install -r requirements.lock && pip install -e . --no-deps
 
 COPY config ./config
 COPY dashboards ./dashboards

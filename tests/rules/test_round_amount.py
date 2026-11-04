@@ -48,3 +48,10 @@ def test_negative_spread_across_different_counterparties():
         txn("t3", "ACC1", "ACC4", 8000, hours=48),
     ]
     assert round_amount.detect(txns, CONFIG) == []
+
+
+def test_alert_covers_whole_burst_and_later_bursts():
+    txns = [txn(f"a{i}", "ACC1", "ACC2", 5000, hours=i) for i in range(6)]
+    txns += [txn(f"b{i}", "ACC1", "ACC2", 5000, days=30, hours=i) for i in range(3)]
+    alerts = sorted(round_amount.detect(txns, CONFIG), key=lambda a: a.created_at)
+    assert [a.evidence["count"] for a in alerts] == [6, 3]
