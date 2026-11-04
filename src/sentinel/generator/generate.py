@@ -1,14 +1,19 @@
 """Reproducible synthetic AML transaction generator.
 
-Each ``_inject_*`` helper plants a clear positive case for one typology and
-labels those transactions ``is_laundering=1``. Benign background traffic is
-labelled 0. Output is a normalised DataFrame consumable by
+Every typology has one randomised activity shape. Laundering entities and
+legitimate look-alikes use the *same* shape, so amounts and timing alone cannot
+separate them: the difference a model can learn is context. Legitimate entities
+tend to have a longer established history, with deliberate overlap between the
+two groups. Benign background traffic is labelled 0.
+
+Output is a normalised DataFrame consumable by
 :func:`sentinel.ingestion.load_transactions`.
 """
 
 from __future__ import annotations
 
 import random
+from collections.abc import Callable
 from datetime import datetime, timedelta
 
 import pandas as pd
@@ -17,6 +22,10 @@ from sentinel.models import TransactionType
 
 BASE = datetime(2026, 1, 1, 8, 0, 0)
 HIGH_RISK = ["IR", "KP", "SY"]
+HISTORY_DAYS = 60  # established activity precedes every episode
+EPISODE_SPREAD_DAYS = 30  # episodes start at a random time after that
+LAUNDERING_HISTORY_TXNS = (0, 12)
+LEGITIMATE_HISTORY_TXNS = (8, 40)
 
 
 def _row(
@@ -46,81 +55,85 @@ def _row(
     )
 
 
-def _inject_structuring(rows: list[dict], rng: random.Random, account: str) -> None:
-    for i in range(4):
+def _inject_history(rows: list[dict], rng: random.Random, account: str, count: int) -> None:
+    """Ordinary small payments before the episode, labelled 0 for every entity."""
+    for _ in range(count):
         _row(
             rows,
-            sender="EXT",
-            receiver=account,
-            amount=rng.uniform(9000, 9999),
-            offset_hours=i * 12,
-            txn_type=TransactionType.CASH_DEPOSIT,
-            is_laundering=1,
+            account,
+            f"{account}_CP{rng.randint(1, 5)}",
+            rng.uniform(50, 900),
+            rng.uniform(0, 24 * HISTORY_DAYS),
         )
 
 
-def _inject_rapid_movement(rows: list[dict], account: str) -> None:
-    _row(rows, "EXT", account, 30000, 0, is_laundering=1)
-    _row(rows, account, "MULE1", 16000, 3, is_laundering=1)
-    _row(rows, account, "MULE2", 12000, 6, is_laundering=1)
+def _structuring(
+    rows: list[dict], rng: random.Random, account: str, t0: float, label: int, _factor: float
+) -> None:
+    for i in range(rng.randint(3, 5)):
+        _row(
+            rows,
+            f"{account}_CASH",
+            account,
+            rng.uniform(9000, 9999),
+            t0 + i * rng.uniform(8, 16),
+            txn_type=TransactionType.CASH_DEPOSIT,
+            is_laundering=label,
+        )
 
 
-def _inject_round_amount(rows: list[dict], src: str, dst: str) -> None:
-    for i in range(4):
-        _row(rows, src, dst, (i + 5) * 1000, i * 24, is_laundering=1)
+def _rapid_movement(
+    rows: list[dict], rng: random.Random, account: str, t0: float, label: int, factor: float
+) -> None:
+    inbound = rng.uniform(10000, 40000) * factor
+    outbound = inbound * rng.uniform(0.92, 1.0)
+    first_share = rng.uniform(0.4, 0.6)
+    _row(rows, f"{account}_SRC", account, inbound, t0, is_laundering=label)
+    _row(rows, account, f"{account}_OUT1", outbound * first_share,
+         t0 + rng.uniform(1, 12), is_laundering=label)
+    _row(rows, account, f"{account}_OUT2", outbound * (1 - first_share),
+         t0 + rng.uniform(12, 30), is_laundering=label)
 
 
-def _inject_threshold_avoidance(rows: list[dict], account: str) -> None:
-    for i in range(3):
-        _row(rows, account, "PAYEE", 9700 + i * 50, i * 48, is_laundering=1)
+def _round_amount(
+    rows: list[dict], rng: random.Random, account: str, t0: float, label: int, factor: float
+) -> None:
+    for i in range(rng.randint(3, 5)):
+        amount = max(1000.0, round(rng.randint(3, 9) * 1000 * factor, -3))
+        _row(rows, account, f"{account}_DST", amount, t0 + i * rng.uniform(20, 36),
+             is_laundering=label)
 
 
-def _inject_high_risk_geo(rows: list[dict], account: str) -> None:
-    _row(rows, account, "FOREIGN", 25000, 0, receiver_country=HIGH_RISK[0], is_laundering=1)
-    _row(rows, "FOREIGN2", account, 18000, 12, sender_country=HIGH_RISK[1], is_laundering=1)
+def _threshold_avoidance(
+    rows: list[dict], rng: random.Random, account: str, t0: float, label: int, _factor: float
+) -> None:
+    for i in range(rng.randint(2, 4)):
+        _row(rows, account, f"{account}_PAYEE", rng.uniform(9550, 9950),
+             t0 + i * rng.uniform(24, 48), is_laundering=label)
 
 
-def _inject_velocity_spike(rows: list[dict], rng: random.Random, account: str) -> None:
-    # Quiet baseline over ~25 days.
-    for d in range(8):
-        _row(rows, account, "REG", rng.uniform(100, 300), d * 24 * 3, is_laundering=0)
-    # Sudden surge in the last day.
-    for h in range(4):
-        _row(rows, account, "REG", 8000, 24 * 25 + h, is_laundering=1)
+def _high_risk_geography(
+    rows: list[dict], rng: random.Random, account: str, t0: float, label: int, factor: float
+) -> None:
+    _row(rows, account, f"{account}_ABROAD", rng.uniform(2000, 30000) * factor, t0,
+         receiver_country=rng.choice(HIGH_RISK), is_laundering=label)
+    _row(rows, f"{account}_ABROAD2", account, rng.uniform(2000, 30000) * factor,
+         t0 + rng.uniform(6, 48), sender_country=rng.choice(HIGH_RISK), is_laundering=label)
+
+
+def _velocity_spike(
+    rows: list[dict], rng: random.Random, account: str, t0: float, label: int, _factor: float
+) -> None:
+    for _ in range(8):  # quiet baseline in the weeks before the surge
+        _row(rows, account, f"{account}_REG", rng.uniform(100, 300), t0 - rng.uniform(24, 24 * 25))
+    for h in range(rng.randint(3, 5)):
+        _row(rows, account, f"{account}_REG", rng.uniform(3000, 9000), t0 + h, is_laundering=label)
 
 
 def _inject_network_ring(rows: list[dict]) -> None:
     _row(rows, "RING_A", "RING_B", 5000, 0, is_laundering=1)
     _row(rows, "RING_B", "RING_C", 4900, 24, is_laundering=1)
     _row(rows, "RING_C", "RING_A", 4800, 48, is_laundering=1)
-
-
-def _inject_hard_negative(rows: list[dict], rng: random.Random, account: str, kind: str) -> None:
-    """Legitimate activity that nonetheless trips a rule (labelled is_laundering=0).
-
-    These are the genuine false positives a TM team battles: a cash-intensive
-    retailer that looks like structuring, a corporate treasury making round
-    transfers, payroll causing a velocity spike. They overlap the laundering
-    feature space, so the ML layer cannot perfectly separate — giving an honest,
-    defensible false-positive-reduction metric rather than a too-perfect 100%.
-    """
-    if kind == "retailer_cash":  # structuring look-alike
-        for i in range(4):
-            _row(
-                rows, "TILL", account, rng.uniform(9100, 9900), i * 14,
-                txn_type=TransactionType.CASH_DEPOSIT, is_laundering=0,
-            )
-    elif kind == "treasury_round":  # round-amount look-alike
-        for i in range(4):
-            _row(rows, account, f"{account}_SUP", (i + 3) * 1000, i * 30, is_laundering=0)
-    elif kind == "payroll_spike":  # velocity look-alike
-        for d in range(8):
-            _row(rows, account, "VENDOR", rng.uniform(150, 400), d * 24 * 3, is_laundering=0)
-        for h in range(3):
-            _row(rows, account, "VENDOR", rng.uniform(5000, 8000), 24 * 25 + h, is_laundering=0)
-    elif kind == "invoice_threshold":  # threshold-avoidance look-alike
-        for i in range(2):
-            _row(rows, account, "CONTRACTOR", rng.uniform(9550, 9950), i * 40, is_laundering=0)
 
 
 def _inject_benign(rows: list[dict], rng: random.Random, n: int) -> None:
@@ -134,7 +147,7 @@ def _inject_benign(rows: list[dict], rng: random.Random, n: int) -> None:
             a,
             b,
             rng.uniform(20, 4000),
-            rng.uniform(0, 24 * 30),
+            rng.uniform(0, 24 * (HISTORY_DAYS + EPISODE_SPREAD_DAYS)),
             txn_type=rng.choice(
                 [TransactionType.TRANSFER, TransactionType.CARD, TransactionType.CHEQUE]
             ),
@@ -142,36 +155,58 @@ def _inject_benign(rows: list[dict], rng: random.Random, n: int) -> None:
         )
 
 
+_Shape = Callable[[list[dict], random.Random, str, float, int, float], None]
+
+# (laundering prefix, legitimate look-alike prefix, activity shape)
+_TYPOLOGIES: list[tuple[str, str, _Shape]] = [
+    ("STRUCT_ACC", "RETAIL", _structuring),  # cash-intensive retailer
+    ("PASS_ACC", "SWEEP", _rapid_movement),  # treasury sweep account
+    ("LAYER_ACC", "CORP", _round_amount),  # corporate supplier payments
+    ("THRESH_ACC", "INVOICE", _threshold_avoidance),  # regular contractor invoices
+    ("GEO_ACC", "TRADE", _high_risk_geography),  # licensed trade or aid payments
+    ("VELO_ACC", "PAYROLL", _velocity_spike),  # payroll run
+]
+
+
+def _episode_start(rng: random.Random) -> float:
+    return 24 * (HISTORY_DAYS + rng.uniform(0, EPISODE_SPREAD_DAYS))
+
+
 def generate_dataset(
-    seed: int = 42, benign: int = 400, scale: int = 1, hard_negative_ratio: float = 0.6
+    seed: int = 42,
+    benign: int = 400,
+    scale: int = 1,
+    hard_negative_ratio: float = 5.0,
+    laundering_amount_factor: float = 1.0,
+    laundering_history_txns: tuple[int, int] = LAUNDERING_HISTORY_TXNS,
 ) -> pd.DataFrame:
     """Generate a reproducible synthetic dataset covering every typology.
 
     ``scale`` injects that many distinct laundering entities per typology.
-    ``hard_negative_ratio`` controls how many *legitimate but rule-tripping*
-    entities are injected relative to scale — these are the realistic false
-    positives that give the ML layer an honest job. Set to 0 for a clean dataset.
+    ``hard_negative_ratio`` sets how many *legitimate but rule-tripping* entities
+    are injected per laundering entity. Set to 0 for a clean dataset.
+    ``laundering_amount_factor`` shifts laundering amounts for rapid movement,
+    round-amount and geography, to test whether a model survives changed amounts.
+    ``laundering_history_txns`` sets the laundering history range. Matching
+    ``LEGITIMATE_HISTORY_TXNS`` removes the only signal the generator plants.
     """
     rng = random.Random(seed)
     rows: list[dict] = []
 
     for i in range(scale):
         sfx = "" if i == 0 else f"_{i}"
-        _inject_structuring(rows, rng, f"STRUCT_ACC{sfx}")
-        _inject_rapid_movement(rows, f"PASS_ACC{sfx}")
-        _inject_round_amount(rows, f"LAYER_SRC{sfx}", f"LAYER_DST{sfx}")
-        _inject_threshold_avoidance(rows, f"THRESH_ACC{sfx}")
-        _inject_high_risk_geo(rows, f"GEO_ACC{sfx}")
-        _inject_velocity_spike(rows, rng, f"VELO_ACC{sfx}")
+        for prefix, _, shape in _TYPOLOGIES:
+            account = f"{prefix}{sfx}"
+            _inject_history(rows, rng, account, rng.randint(*laundering_history_txns))
+            shape(rows, rng, account, _episode_start(rng), 1, laundering_amount_factor)
         if i == 0:
             _inject_network_ring(rows)
 
-    hard = int(scale * hard_negative_ratio)
-    for i in range(hard):
-        _inject_hard_negative(rows, rng, f"RETAIL{i}", "retailer_cash")
-        _inject_hard_negative(rows, rng, f"CORP{i}", "treasury_round")
-        _inject_hard_negative(rows, rng, f"PAYROLL{i}", "payroll_spike")
-        _inject_hard_negative(rows, rng, f"INVOICE{i}", "invoice_threshold")
+    for i in range(int(scale * hard_negative_ratio)):
+        for _, prefix, shape in _TYPOLOGIES:
+            account = f"{prefix}{i}"
+            _inject_history(rows, rng, account, rng.randint(*LEGITIMATE_HISTORY_TXNS))
+            shape(rows, rng, account, _episode_start(rng), 0, 1.0)
 
     _inject_benign(rows, rng, benign)
 

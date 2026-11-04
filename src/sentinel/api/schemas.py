@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel, Field
 
 from sentinel.models import DispositionStatus
 
 
 class DispositionRequest(BaseModel):
-    """An analyst's disposition. Rationale is mandatory (min length 1)."""
+    """An analyst's disposition. The analyst is taken from the API key, never from this body."""
+
+    model_config = {"str_strip_whitespace": True}
 
     status: DispositionStatus
     rationale: str = Field(min_length=1, description="Mandatory justification for the decision")
-    analyst: str = Field(min_length=1)
 
 
 class SARResponse(BaseModel):
@@ -23,3 +26,10 @@ class SARResponse(BaseModel):
 
 class MessageResponse(BaseModel):
     message: str
+
+
+class AuditEntryResponse(BaseModel):
+    actor: str
+    action: str
+    detail: dict
+    at: datetime

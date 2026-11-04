@@ -11,6 +11,8 @@ Requires the API:  uvicorn sentinel.api.main:app --port 8000
 
 from __future__ import annotations
 
+import os
+
 import _client as api
 import pandas as pd
 import streamlit as st
@@ -44,7 +46,10 @@ with st.sidebar:
     f_status = st.selectbox("Status", ["open", "", "escalated", "false_positive"], index=0)
     f_typology = st.selectbox("Typology", ["", *TYPOLOGIES], index=0)
     f_severity = st.selectbox("Severity", ["", "high", "medium", "low"], index=0)
-    analyst = st.text_input("Analyst", value="ajmal")
+    st.header("Analyst sign-in")
+    api_key = st.text_input(
+        "API key", type="password", value=os.environ.get("SENTINEL_API_KEY", "")
+    )
 
 alerts = api.get_alerts(status=f_status, typology=f_typology, severity=f_severity, limit=200)
 
@@ -80,6 +85,7 @@ with right:
     c1.metric("Risk score", f"{score:.0f}/100" if score is not None else "—")
     c2.metric("Severity", alert["severity"].upper())
     c3.metric("Typology", alert["rule_id"])
+    st.caption(f"Status: {alert['status']}")
 
     if alert.get("risk_reasons"):
         st.markdown("**Why this alert is risk-ranked here:**")
@@ -94,25 +100,38 @@ with right:
 
     st.divider()
     st.markdown("### Disposition")
-    decision = st.radio(
-        "Decision", ["Close as False Positive", "Escalate to SAR"], horizontal=True
-    )
-    rationale = st.text_area(
-        "Rationale (required)",
-        placeholder="Document what you reviewed and your risk-based judgement…",
-    )
+    if alert["status"] != "open":
+        st.info(f"This alert is closed as {alert['status']}. Decisions are final.")
+        existing_sar = api.get_sar(selected_id)
+        if existing_sar:
+            st.markdown("### SAR narrative")
+            st.code(existing_sar["narrative"], language="text")
+    else:
+        decision = st.radio(
+            "Decision", ["Close as False Positive", "Escalate to SAR"], horizontal=True
+        )
+        rationale = st.text_area(
+            "Rationale (required)",
+            placeholder="Document what you reviewed and your risk-based judgement…",
+        )
 
-    if st.button("Submit disposition", type="primary"):
-        if not rationale.strip():
-            st.error("Rationale is mandatory — an analyst must document the decision.")
-        else:
-            status = "false_positive" if decision.startswith("Close") else "escalated"
-            resp = api.post_disposition(selected_id, status, rationale.strip(), analyst)
-            if resp.status_code == 200:
-                st.success(f"Recorded: {status}. Audit trail updated.")
-                if status == "escalated":
-                    sar = api.create_sar(selected_id)
-                    st.markdown("### Auto-drafted SAR narrative")
-                    st.code(sar["narrative"], language="text")
+        if st.button("Submit disposition", type="primary"):
+            if not rationale.strip():
+                st.error("Rationale is mandatory — an analyst must document the decision.")
             else:
-                st.error(f"API error {resp.status_code}: {resp.text}")
+                status = "false_positive" if decision.startswith("Close") else "escalated"
+                resp = api.post_disposition(selected_id, status, rationale.strip(), api_key)
+                if resp.status_code == 200:
+                    st.success(f"Recorded: {status}. Audit trail updated.")
+                    if status == "escalated":
+                        sar = api.create_sar(selected_id, api_key)
+                        if sar.status_code == 200:
+                            st.markdown("### Auto-drafted SAR narrative")
+                            st.code(sar.json()["narrative"], language="text")
+                        else:
+                            st.error(f"SAR error {sar.status_code}: {sar.text}")
+                else:
+                    st.error(f"API error {resp.status_code}: {resp.text}")
+
+    with st.expander("Audit trail"):
+        st.dataframe(pd.DataFrame(api.get_audit(selected_id)), hide_index=True)

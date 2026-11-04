@@ -7,11 +7,19 @@ Streamlit dashboards are thin clients over these endpoints.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Annotated
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 
-from sentinel.api.schemas import DispositionRequest, MessageResponse, SARResponse
+from sentinel.api.auth import current_analyst
+from sentinel.api.schemas import (
+    AuditEntryResponse,
+    DispositionRequest,
+    MessageResponse,
+    SARResponse,
+)
 from sentinel.casestore import CaseStore
+from sentinel.casestore.errors import InvalidTransition
 from sentinel.models import Alert, Disposition
 from sentinel.sar import generate_sar_narrative
 
@@ -23,6 +31,8 @@ app = FastAPI(
 
 # Single shared case store (creates tables on first use).
 store = CaseStore()
+
+Analyst = Annotated[str, Depends(current_analyst)]
 
 
 @app.get("/health")
@@ -50,30 +60,35 @@ def get_alert(alert_id: str) -> Alert:
 
 
 @app.post("/alerts/{alert_id}/disposition", response_model=MessageResponse)
-def disposition(alert_id: str, req: DispositionRequest) -> MessageResponse:
-    """Record a disposition. Rationale is mandatory and the action is audited."""
+def disposition(alert_id: str, req: DispositionRequest, analyst: Analyst) -> MessageResponse:
+    """Record a disposition on an open alert, audited against the caller's API key."""
     disp = Disposition(
         alert_id=alert_id,
         status=req.status,
         rationale=req.rationale,
-        analyst=req.analyst,
+        analyst=analyst,
         decided_at=datetime.now(UTC),
     )
     try:
         store.record_disposition(disp)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except InvalidTransition as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return MessageResponse(message=f"alert {alert_id} dispositioned as {req.status.value}")
 
 
 @app.post("/alerts/{alert_id}/sar", response_model=SARResponse)
-def create_sar(alert_id: str) -> SARResponse:
-    """Generate (and persist) a SAR narrative draft for an alert."""
+def create_sar(alert_id: str, analyst: Analyst) -> SARResponse:
+    """Generate (and persist) a SAR narrative draft for an escalated alert."""
     alert = store.get_alert(alert_id)
     if alert is None:
         raise HTTPException(status_code=404, detail="alert not found")
-    draft = generate_sar_narrative(alert)
-    store.save_sar_draft(draft)
+    draft = generate_sar_narrative(alert, reviewed_by=analyst)
+    try:
+        store.save_sar_draft(draft, analyst=analyst)
+    except InvalidTransition as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return SARResponse(alert_id=alert_id, typology=draft.typology.value, narrative=draft.narrative)
 
 
@@ -83,6 +98,17 @@ def get_sar(alert_id: str) -> SARResponse:
     if draft is None:
         raise HTTPException(status_code=404, detail="no SAR draft for this alert")
     return SARResponse(alert_id=alert_id, typology=draft.typology.value, narrative=draft.narrative)
+
+
+@app.get("/alerts/{alert_id}/audit", response_model=list[AuditEntryResponse])
+def get_audit(alert_id: str) -> list[AuditEntryResponse]:
+    """Return the alert's audit trail, oldest first."""
+    if store.get_alert(alert_id) is None:
+        raise HTTPException(status_code=404, detail="alert not found")
+    return [
+        AuditEntryResponse(actor=e.actor, action=e.action, detail=e.detail, at=e.at)
+        for e in store.audit_trail(alert_id)
+    ]
 
 
 @app.get("/mi/summary")

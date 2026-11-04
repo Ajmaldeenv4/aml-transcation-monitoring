@@ -1,18 +1,23 @@
 """Velocity Spike detection.
 
 Typology: a sudden, anomalous jump in a customer's (here, an account's)
-transaction value relative to that account's own historical baseline. We compute
-a baseline mean over an earlier window and flag when a recent window's total
-exceeds the baseline by a configured multiplier. This is a per-entity,
-behaviour-relative scenario — the essence of a risk-based approach.
+transaction value relative to that account's own historical baseline. Every
+transaction ends a candidate recent window, so a spike is found wherever it sits
+in the account's history. The baseline is the mean total of the earlier windows
+in which the account was active, so quiet days do not dilute it and sparse but
+steady activity is not mistaken for a spike. Overlapping hits form one episode,
+reported once at its peak. This is a per-entity, behaviour-relative scenario —
+the essence of a risk-based approach.
 """
 
 from __future__ import annotations
 
+from bisect import bisect_left
 from collections import defaultdict
-from datetime import timedelta
+from collections.abc import Sequence
+from datetime import datetime, timedelta
 
-from sentinel.models import Alert, Transaction, Typology
+from sentinel.models import Alert, Severity, Transaction, Typology
 from sentinel.rules._common import build_alert, severity_from_config, sort_by_time
 
 RULE_ID = Typology.VELOCITY_SPIKE
@@ -25,7 +30,7 @@ def detect(transactions: list[Transaction], config: dict) -> list[Alert]:
 
     multiplier = cfg.get("multiplier", 3.0)
     recent_window = timedelta(hours=cfg.get("recent_window_hours", 24))
-    baseline_days = cfg.get("baseline_window_days", 30)
+    baseline_span = timedelta(days=cfg.get("baseline_window_days", 30))
     min_baseline_txns = cfg.get("min_baseline_txns", 5)
     severity = severity_from_config(cfg.get("severity"))
 
@@ -38,39 +43,59 @@ def detect(transactions: list[Transaction], config: dict) -> list[Alert]:
         ordered = sort_by_time(txns)
         if len(ordered) <= min_baseline_txns:
             continue
-        latest = ordered[-1].timestamp
-        recent_start = latest - recent_window
-        baseline_start = latest - timedelta(days=baseline_days)
+        times = [t.timestamp for t in ordered]
+        peak: list[Transaction] | None = None
+        peak_total = 0.0
+        peak_baseline = 0.0
+        for end, end_time in enumerate(times):
+            if end + 1 < len(times) and times[end + 1] == end_time:
+                continue  # same-instant txns belong in one window
+            recent_start = end_time - recent_window
+            recent_from = bisect_left(times, recent_start)
+            baseline = ordered[bisect_left(times, end_time - baseline_span) : recent_from]
+            if len(baseline) < min_baseline_txns:
+                continue
 
-        recent = [t for t in ordered if t.timestamp >= recent_start]
-        baseline = [t for t in ordered if baseline_start <= t.timestamp < recent_start]
-        if len(baseline) < min_baseline_txns or not recent:
-            continue
+            baseline_per_window = _mean_active_window_total(baseline, recent_start, recent_window)
+            recent = ordered[recent_from : end + 1]
+            recent_total = sum(t.amount for t in recent)
+            if recent_total < multiplier * baseline_per_window:
+                continue
 
-        # Average the baseline total over its *observed* span (first baseline txn to
-        # the start of the recent window), measured in recent-window units. Using the
-        # observed span rather than the full configured window avoids treating sparse
-        # but steady activity as a spike.
-        baseline_span_windows = max(
-            (recent_start - baseline[0].timestamp) / recent_window, 1.0
-        )
-        baseline_total = sum(t.amount for t in baseline)
-        baseline_per_window = baseline_total / baseline_span_windows
-        recent_total = sum(t.amount for t in recent)
+            if peak is not None and recent_start > peak[-1].timestamp:
+                alerts.append(_spike_alert(account, peak, peak_baseline, severity))
+                peak = None  # the previous episode is over
+            if peak is None or recent_total > peak_total:
+                peak, peak_total, peak_baseline = recent, recent_total, baseline_per_window
 
-        if baseline_per_window > 0 and recent_total >= multiplier * baseline_per_window:
-            alerts.append(
-                build_alert(
-                    RULE_ID,
-                    account,
-                    recent,
-                    severity,
-                    evidence={
-                        "recent_total": round(recent_total, 2),
-                        "baseline_per_window": round(baseline_per_window, 2),
-                        "ratio": round(recent_total / baseline_per_window, 2),
-                        "recent_txn_count": len(recent),
-                    },
-                )
-            )
+        if peak is not None:
+            alerts.append(_spike_alert(account, peak, peak_baseline, severity))
     return alerts
+
+
+def _mean_active_window_total(
+    baseline: Sequence[Transaction], recent_start: datetime, recent_window: timedelta
+) -> float:
+    """Mean total per recent-window-sized bucket, counting only buckets with activity."""
+    totals: dict[int, float] = defaultdict(float)
+    for t in baseline:
+        totals[(recent_start - t.timestamp) // recent_window] += t.amount
+    return sum(totals.values()) / len(totals)
+
+
+def _spike_alert(
+    account: str, recent: list[Transaction], baseline_per_window: float, severity: Severity
+) -> Alert:
+    recent_total = sum(t.amount for t in recent)
+    return build_alert(
+        RULE_ID,
+        account,
+        recent,
+        severity,
+        evidence={
+            "recent_total": round(recent_total, 2),
+            "baseline_per_window": round(baseline_per_window, 2),
+            "ratio": round(recent_total / baseline_per_window, 2),
+            "recent_txn_count": len(recent),
+        },
+    )

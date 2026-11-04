@@ -2,16 +2,18 @@
 
 These persistence tables are distinct from the domain Pydantic models in
 ``sentinel.models``; the repository maps between them. The ``AuditEntry`` table
-is append-only — the repository never updates or deletes rows, giving an
-immutable audit trail of who did what, when.
+is append-only: the ORM refuses changes to its rows on every backend, and on
+SQLite database triggers also refuse them for raw SQL (see ``db.init_db``).
 """
 
 from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import JSON, Column
+from sqlalchemy import JSON, Column, event
 from sqlmodel import Field, SQLModel
+
+from sentinel.casestore.errors import AuditImmutableError
 
 
 class AlertRecord(SQLModel, table=True):
@@ -62,3 +64,11 @@ class AuditEntry(SQLModel, table=True):
     entity_id: str = Field(index=True)
     detail: dict = Field(default_factory=dict, sa_column=Column(JSON))
     at: datetime
+
+
+def _refuse_audit_change(_mapper, _connection, target: AuditEntry) -> None:
+    raise AuditImmutableError(f"audit entry {target.id} cannot be changed or deleted")
+
+
+event.listen(AuditEntry, "before_update", _refuse_audit_change)
+event.listen(AuditEntry, "before_delete", _refuse_audit_change)

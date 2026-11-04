@@ -6,7 +6,7 @@ import hashlib
 from collections.abc import Iterable, Sequence
 from datetime import datetime
 
-from sentinel.models import Alert, Severity, Transaction, Typology
+from sentinel.models import Alert, Severity, Transaction, TransactionType, Typology
 
 _SEVERITY_MAP = {"low": Severity.LOW, "medium": Severity.MEDIUM, "high": Severity.HIGH}
 
@@ -25,12 +25,45 @@ def make_alert_id(rule_id: Typology, entity_id: str, txn_ids: Sequence[str]) -> 
     return f"{rule_id.value}-{digest}"
 
 
+def customer_account(t: Transaction) -> str:
+    """The account whose behaviour this transaction shows: a deposit's receiver, else the sender."""
+    return t.receiver_account if t.txn_type is TransactionType.CASH_DEPOSIT else t.sender_account
+
+
 def earliest_timestamp(txns: Iterable[Transaction]) -> datetime:
     return min(t.timestamp for t in txns)
 
 
 def sort_by_time(txns: Iterable[Transaction]) -> list[Transaction]:
     return sorted(txns, key=lambda t: t.timestamp)
+
+
+def find_bursts(
+    ordered: Sequence[Transaction], window_seconds: float, min_count: int
+) -> list[list[Transaction]]:
+    """Return every non-overlapping burst of >= min_count txns inside the window.
+
+    ``ordered`` must be time-sorted. Each burst keeps all transactions that fall
+    within the window of its first transaction, so evidence reflects the full
+    activity. Scanning resumes after a burst, so later episodes also alert.
+    """
+    bursts: list[list[Transaction]] = []
+    start = 0
+    end = 0
+    while end < len(ordered):
+        while (ordered[end].timestamp - ordered[start].timestamp).total_seconds() > window_seconds:
+            start += 1
+        if end - start + 1 >= min_count:
+            while (
+                end + 1 < len(ordered)
+                and (ordered[end + 1].timestamp - ordered[start].timestamp).total_seconds()
+                <= window_seconds
+            ):
+                end += 1
+            bursts.append(list(ordered[start : end + 1]))
+            start = end + 1
+        end += 1
+    return bursts
 
 
 def build_alert(

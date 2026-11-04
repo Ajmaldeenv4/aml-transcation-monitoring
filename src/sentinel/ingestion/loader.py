@@ -41,13 +41,45 @@ _TYPE_ALIASES = {
     "wire": TransactionType.WIRE,
 }
 
-# Common country-name -> ISO alpha-2 normalisation (SAML-D uses names).
+# Marker for a missing country (ISO reserves "XX" for user-assigned use).
+UNKNOWN_COUNTRY = "XX"
+
+# Country-name -> ISO 3166-1 alpha-2. Covers SAML-D's bank locations plus the
+# watchlist jurisdictions and the names most likely to be confused with them.
 _COUNTRY_ALIASES = {
-    "UK": "GB",
-    "UNITED KINGDOM": "GB",
-    "USA": "US",
-    "UNITED STATES": "US",
+    "AFGHANISTAN": "AF",
+    "ALBANIA": "AL",
+    "AUSTRIA": "AT",
+    "FRANCE": "FR",
+    "GERMANY": "DE",
+    "INDIA": "IN",
+    "IRAN": "IR",
+    "IRAQ": "IQ",
+    "IRELAND": "IE",
+    "ITALY": "IT",
+    "JAPAN": "JP",
+    "MALAYSIA": "MY",
+    "MALI": "ML",
+    "MEXICO": "MX",
+    "MOROCCO": "MA",
+    "MYANMAR": "MM",
+    "NETHERLANDS": "NL",
+    "NIGERIA": "NG",
+    "NORTH KOREA": "KP",
+    "PAKISTAN": "PK",
+    "SOUTH KOREA": "KR",
+    "SPAIN": "ES",
+    "SWEDEN": "SE",
+    "SWITZERLAND": "CH",
+    "SYRIA": "SY",
+    "TURKEY": "TR",
     "UAE": "AE",
+    "UK": "GB",
+    "UNITED ARAB EMIRATES": "AE",
+    "UNITED KINGDOM": "GB",
+    "UNITED STATES": "US",
+    "USA": "US",
+    "YEMEN": "YE",
 }
 
 
@@ -63,8 +95,15 @@ def _coerce_type(value: object) -> TransactionType:
 
 
 def _coerce_country(value: object) -> str:
+    """Map a country name or code to ISO alpha-2.
+
+    Unmapped values pass through unchanged rather than being guessed: a truncated
+    name can collide with a real code, e.g. "Ireland" would read as Iran ("IR").
+    """
+    if pd.isna(value):
+        return UNKNOWN_COUNTRY
     code = str(value).strip().upper()
-    return _COUNTRY_ALIASES.get(code, code[:2] if len(code) >= 2 else "US")
+    return _COUNTRY_ALIASES.get(code, code) if code else UNKNOWN_COUNTRY
 
 
 def normalise_frame(df: pd.DataFrame, column_map: dict[str, str] | None = None) -> pd.DataFrame:

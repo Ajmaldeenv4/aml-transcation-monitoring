@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections import defaultdict
 
 from sentinel.models import Alert, Transaction, TransactionType, Typology
-from sentinel.rules._common import build_alert, severity_from_config, sort_by_time
+from sentinel.rules._common import build_alert, find_bursts, severity_from_config, sort_by_time
 
 RULE_ID = Typology.ROUND_AMOUNT
 
@@ -39,35 +39,19 @@ def detect(transactions: list[Transaction], config: dict) -> list[Alert]:
 
     alerts: list[Alert] = []
     for (sender, _receiver), txns in by_pair.items():
-        ordered = sort_by_time(txns)
-        window_txns = _first_window(ordered, window, min_count)
-        if window_txns:
+        for burst in find_bursts(sort_by_time(txns), window, min_count):
             alerts.append(
                 build_alert(
                     RULE_ID,
                     sender,
-                    window_txns,
+                    burst,
                     severity,
                     evidence={
-                        "count": len(window_txns),
-                        "total_amount": round(sum(t.amount for t in window_txns), 2),
+                        "count": len(burst),
+                        "total_amount": round(sum(t.amount for t in burst), 2),
                         "round_multiple": multiple,
-                        "counterparty": window_txns[0].receiver_account,
+                        "counterparty": burst[0].receiver_account,
                     },
                 )
             )
     return alerts
-
-
-def _first_window(
-    ordered: list[Transaction], window_seconds: int, min_count: int
-) -> list[Transaction]:
-    start = 0
-    for end in range(len(ordered)):
-        while (
-            ordered[end].timestamp - ordered[start].timestamp
-        ).total_seconds() > window_seconds:
-            start += 1
-        if end - start + 1 >= min_count:
-            return ordered[start : end + 1]
-    return []

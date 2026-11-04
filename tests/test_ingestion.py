@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
+from sentinel.config import load_high_risk_countries
 from sentinel.generator import generate_dataset
 from sentinel.ingestion import load_transactions, normalise_frame, read_saml_d_frame
+from sentinel.ingestion.loader import UNKNOWN_COUNTRY, _coerce_country
 from sentinel.models import TransactionType, Typology
 from sentinel.rules import run_rules
 
@@ -83,3 +86,39 @@ def test_saml_d_sampling_is_reproducible(tmp_path):
     b = read_saml_d_frame(path, sample_frac=0.3, seed=42)
     assert len(a) == len(b)
     assert int(a["Is_laundering"].sum()) == 4  # all positives retained either way
+
+
+@pytest.mark.parametrize(
+    ("name", "code"),
+    [
+        ("Turkey", "TR"),
+        ("Morocco", "MA"),
+        ("Nigeria", "NG"),
+        ("Mexico", "MX"),
+        ("Pakistan", "PK"),
+        ("Germany", "DE"),
+        ("Switzerland", "CH"),
+        ("UAE", "AE"),
+        ("UK", "GB"),
+        ("Myanmar", "MM"),
+        ("North Korea", "KP"),
+    ],
+)
+def test_country_names_map_to_iso_codes(name, code):
+    assert _coerce_country(name) == code
+
+
+def test_country_names_do_not_collide_with_watchlist():
+    watchlist = load_high_risk_countries()
+    for name in ("Ireland", "Iraq", "Sweden", "Malaysia"):
+        assert _coerce_country(name) not in watchlist
+
+
+def test_unmapped_country_is_not_truncated():
+    assert _coerce_country("Atlantis") == "ATLANTIS"
+    assert _coerce_country("DE") == "DE"
+
+
+def test_missing_country_is_marked_unknown():
+    assert _coerce_country(float("nan")) == UNKNOWN_COUNTRY
+    assert _coerce_country("  ") == UNKNOWN_COUNTRY
